@@ -81,18 +81,17 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     SC, AccessPermission:Read_Only, desc="a L1 cache entry Slave Clean";
 
     // Transient States
-    IS, AccessPermission:Busy, desc="L1 idle, issued GETS, have not seen response yet";
     IM, AccessPermission:Busy, desc="L1 idle, issued GETX, have not seen response yet";
     SM, AccessPermission:Read_Only, desc="L1 idle, issued GETX, have not seen response yet";
-    IS_I, AccessPermission:Busy, desc="L1 idle, issued GETS, saw Inv before data because directory doesn't block on GETS hit";
-    I_SC, AccessPermission:Busy, desc="L1 idle, issued GETS, have not seen response yet";
-    I_F, AccessPermission:Busy, desc="L1 idle, issued GETS, have not seen response yet";
+    ISC, AccessPermission:Busy, desc="L1 idle, issued GETS, have not seen response yet";
+    IF, AccessPermission:Busy, desc="L1 idle, issued GETS, have not seen response yet";
+    ISC_I, AccessPermission:Busy, desc="L1 idle, issued GETS, saw Inv before data because directory doesn't block on GETS hit";
+    IF_I, AccessPermission:Busy, desc="L1 idle, issued GETS, saw Inv before data because directory doesn't block on GETS hit";
 
     M_I, AccessPermission:Busy, desc="L1 replacing, waiting for ACK";
     SINK_WB_ACK, AccessPermission:Busy, desc="This is to sink WB_Acks from L2";
 
     // Transient States in which block is being prefetched
-    PF_IS, AccessPermission:Busy, desc="Issued GETS, have not seen response yet";
     PF_IM, AccessPermission:Busy, desc="Issued GETX, have not seen response yet";
     PF_SM, AccessPermission:Busy, desc="Issued GETX, received data, waiting for acks";
     PF_IS_I, AccessPermission:Busy, desc="Issued GETs, saw inv before data";
@@ -986,15 +985,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
   //*****************************************************
 
   // Transitions for Load/Store/Replacement/WriteBack from transient states
-  transition({IS, IM, IS_I, M_I, SM, SINK_WB_ACK}, {Load, Ifetch, Store, L1_Replacement}) {
-    z_stallAndWaitMandatoryQueue;
-  }
-
-  transition({PF_IS, PF_IS_I}, {Store, L1_Replacement}) {
-    z_stallAndWaitMandatoryQueue;
-  }
-
-  transition({PF_IM, PF_SM}, {Load, Ifetch, L1_Replacement}) {
+  transition({ISC_I, IM, IF_I, M_I, SM, IF, ISC, SINK_WB_ACK}, {Load, Ifetch, Store, L1_Replacement}) {
     z_stallAndWaitMandatoryQueue;
   }
 
@@ -1003,12 +994,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     ff_deallocateL1CacheBlock;
   }
 
-  transition({S,E,M,IS,IM,SM,IS_I,M_I,SINK_WB_ACK,PF_IS,PF_IM},
-             {PF_Load, PF_Store, PF_Ifetch}) {
-      pq_popPrefetchQueue;
-  }
-
-  transition({NP,I}, Load, IS) {
+  transition({NP,I}, Load_SC, ISC) {
     oo_allocateL1DCacheBlock;
     i_allocateTBE;
     a_issueGETS;
@@ -1017,26 +1003,16 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     k_popMandatoryQueue;
   }
 
-  transition({NP,I}, PF_Load, PF_IS) {
+  transition({NP,I}, Load_F, IF) {
     oo_allocateL1DCacheBlock;
     i_allocateTBE;
-    pa_issuePfGETS;
-    pq_popPrefetchQueue;
-  }
-
-  transition(PF_IS, Load, IS) {
+    a_issueGETS;
     uu_profileDataMiss;
-    ppm_observePfMiss;
+    po_observeMiss;
     k_popMandatoryQueue;
   }
 
-  transition(PF_IS_I, Load, IS_I) {
-    uu_profileDataMiss;
-    ppm_observePfMiss;
-    k_popMandatoryQueue;
-  }
-
-  transition({NP,I}, Ifetch, IS) {
+  transition({NP,I}, Ifetch_SC, ISC) {
     pp_allocateL1ICacheBlock;
     i_allocateTBE;
     ai_issueGETINSTR;
@@ -1045,18 +1021,12 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     k_popMandatoryQueue;
   }
 
-  transition({NP,I}, PF_Ifetch, PF_IS) {
+  transition({NP,I}, Ifetch_F, IF) {
     pp_allocateL1ICacheBlock;
     i_allocateTBE;
-    pai_issuePfGETINSTR;
-    pq_popPrefetchQueue;
-  }
-
-  // We proactively assume that the prefetch is in to
-  // the instruction cache
-  transition(PF_IS, Ifetch, IS) {
-    uu_profileDataMiss;
-    ppm_observePfMiss;
+    ai_issueGETINSTR;
+    uu_profileInstMiss;
+    po_observeMiss;
     k_popMandatoryQueue;
   }
 
@@ -1066,25 +1036,6 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     b_issueGETX;
     uu_profileDataMiss;
     po_observeMiss;
-    k_popMandatoryQueue;
-  }
-
-  transition({NP,I}, PF_Store, PF_IM) {
-    oo_allocateL1DCacheBlock;
-    i_allocateTBE;
-    pb_issuePfGETX;
-    pq_popPrefetchQueue;
-  }
-
-  transition(PF_IM, Store, IM) {
-    uu_profileDataMiss;
-    ppm_observePfMiss;
-    k_popMandatoryQueue;
-  }
-
-  transition(PF_SM, Store, SM) {
-    uu_profileDataMiss;
-    ppm_observePfMiss;
     k_popMandatoryQueue;
   }
 
@@ -1153,7 +1104,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     l_popRequestQueue;
   }
 
-   transition(E, {Fwd_GETS, Fwd_GET_INSTR}, S) {
+  transition(E, {Fwd_GETS, Fwd_GET_INSTR}, PC) {
     d_sendDataToRequestor;
     d2_sendDataToL2;
     l_popRequestQueue;
@@ -1191,7 +1142,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     l_popRequestQueue;
   }
 
-  transition(M, {Fwd_GETS, Fwd_GET_INSTR}, S) {
+  transition(M, {Fwd_GETS, Fwd_GET_INSTR}, PC) {
     d_sendDataToRequestor;
     d2_sendDataToL2;
     l_popRequestQueue;
@@ -1208,18 +1159,13 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     l_popRequestQueue;
   }
 
-  // Transitions from IS
-  transition({IS, IS_I}, Inv, IS_I) {
+  // Transitions from IF
+  transition({IF, IF_I}, Inv, IF_I) {
     fi_sendInvAck;
     l_popRequestQueue;
   }
 
-  transition({PF_IS, PF_IS_I}, Inv, PF_IS_I) {
-    fi_sendInvAck;
-    l_popRequestQueue;
-  }
-
-  transition(IS, Data_all_Acks, S) {
+  transition(IF, Data_all_Acks, F) {
     u_writeDataToL1Cache;
     hx_load_hit;
     s_deallocateTBE;
@@ -1227,15 +1173,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     kd_wakeUpDependents;
   }
 
-  transition(PF_IS, Data_all_Acks, S) {
-    u_writeDataToL1Cache;
-    s_deallocateTBE;
-    mp_markPrefetched;
-    o_popIncomingResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(IS_I, Data_all_Acks, I) {
+  transition(IF_I, Data_all_Acks, I) {
     u_writeDataToL1Cache;
     hx_load_hit;
     s_deallocateTBE;
@@ -1243,13 +1181,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     kd_wakeUpDependents;
   }
 
-  transition(PF_IS_I, Data_all_Acks, I) {
-    s_deallocateTBE;
-    o_popIncomingResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(IS, DataS_fromL1, S) {
+  transition(IF, DataS_fromL1, F) {
     u_writeDataToL1Cache;
     j_sendUnblock;
     hx_load_hit;
@@ -1258,50 +1190,77 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     kd_wakeUpDependents;
   }
 
-  transition(PF_IS, DataS_fromL1, S) {
-    u_writeDataToL1Cache;
-    j_sendUnblock;
-    s_deallocateTBE;
-    o_popIncomingResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(IS_I, DataS_fromL1, I) {
+  transition(IF_I, DataS_fromL1, I) {
     u_writeDataToL1Cache;
     j_sendUnblock;
     hx_load_hit;
-    s_deallocateTBE;
-    o_popIncomingResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(PF_IS_I, DataS_fromL1, I) {
-    j_sendUnblock;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
     kd_wakeUpDependents;
   }
 
   // directory is blocked when sending exclusive data
-  transition(IS_I, Data_Exclusive, E) {
+  transition(IF_I, Data_Exclusive, E) {
     u_writeDataToL1Cache;
     hx_load_hit;
     jj_sendExclusiveUnblock;
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+  }
+
+  transition(IF, Data_Exclusive, E) {
+    u_writeDataToL1Cache;
+    hx_load_hit;
+    jj_sendExclusiveUnblock;
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+  }
+
+
+  // Transitions from ISC
+  transition({ISC, ISC_I}, Inv, ISC_I) {
+    fi_sendInvAck;
+    l_popRequestQueue;
+  }
+
+  transition(ISC, Data_all_Acks, SC) {
+    u_writeDataToL1Cache;
+    hx_load_hit;
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+  }
+
+  transition(ISC_I, Data_all_Acks, I) {
+    u_writeDataToL1Cache;
+    hx_load_hit;
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+  }
+
+  transition(ISC, DataS_fromL1, SC) {
+    u_writeDataToL1Cache;
+    j_sendUnblock;
+    hx_load_hit;
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+  }
+
+  transition(ISC_I, DataS_fromL1, I) {
+    u_writeDataToL1Cache;
+    j_sendUnblock;
+    hx_load_hit;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
     kd_wakeUpDependents;
   }
 
   // directory is blocked when sending exclusive data
-  transition(PF_IS_I, Data_Exclusive, E) {
-    u_writeDataToL1Cache;
-    jj_sendExclusiveUnblock;
-    s_deallocateTBE;
-    o_popIncomingResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(IS, Data_Exclusive, E) {
+  transition(ISC_I, Data_Exclusive, E) {
     u_writeDataToL1Cache;
     hx_load_hit;
     jj_sendExclusiveUnblock;
@@ -1310,11 +1269,11 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     kd_wakeUpDependents;
   }
 
-  transition(PF_IS, Data_Exclusive, E) {
+  transition(ISC, Data_Exclusive, E) {
     u_writeDataToL1Cache;
+    hx_load_hit;
     jj_sendExclusiveUnblock;
     s_deallocateTBE;
-    mp_markPrefetched;
     o_popIncomingResponseQueue;
     kd_wakeUpDependents;
   }
@@ -1325,18 +1284,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     l_popRequestQueue;
   }
 
-  transition({PF_IM, PF_SM}, Inv, PF_IM) {
-    fi_sendInvAck;
-    l_popRequestQueue;
-  }
-
   transition(IM, Data, SM) {
-    u_writeDataToL1Cache;
-    q_updateAckCount;
-    o_popIncomingResponseQueue;
-  }
-
-  transition(PF_IM, Data, PF_SM) {
     u_writeDataToL1Cache;
     q_updateAckCount;
     o_popIncomingResponseQueue;
@@ -1351,15 +1299,6 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     kd_wakeUpDependents;
   }
 
-  transition(PF_IM, Data_all_Acks, M) {
-    u_writeDataToL1Cache;
-    jj_sendExclusiveUnblock;
-    s_deallocateTBE;
-    mp_markPrefetched;
-    o_popIncomingResponseQueue;
-    kd_wakeUpDependents;
-  }
-
   // transitions from SM
   transition(SM, Inv, IM) {
     forward_eviction_to_cpu;
@@ -1368,7 +1307,7 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     l_popRequestQueue;
   }
 
-  transition({SM, IM, PF_SM, PF_IM}, Ack) {
+  transition({SM, IM}, Ack) {
     q_updateAckCount;
     o_popIncomingResponseQueue;
   }
@@ -1377,14 +1316,6 @@ machine(MachineType:L1Cache, "MESCIF Directory L1 Cache CMP")
     jj_sendExclusiveUnblock;
     hhx_store_hit;
     s_deallocateTBE;
-    o_popIncomingResponseQueue;
-    kd_wakeUpDependents;
-  }
-
-  transition(PF_SM, Ack_all, M) {
-    jj_sendExclusiveUnblock;
-    s_deallocateTBE;
-    mp_markPrefetched;
     o_popIncomingResponseQueue;
     kd_wakeUpDependents;
   }
